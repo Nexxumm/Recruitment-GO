@@ -34,7 +34,6 @@ func fromGetDB(user db.GetUserRow) *returnUser {
 		ID:       user.ID,
 		Username: user.Username,
 		Email:    user.Email,
-		PhoneNum: user.PhoneNum,
 	}
 }
 
@@ -59,7 +58,6 @@ func (s *Service) GetUser(c *gin.Context) {
 		return
 	}
 
-	// Build response
 	response := fromGetDB(user)
 	c.IndentedJSON(http.StatusOK, response)
 }
