@@ -1,13 +1,13 @@
 package profile
 
 import (
+	db "Recruitment-GO/internal/db"
 	"context"
 	"database/sql"
-	db "db/sqlc"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Service struct {
@@ -19,68 +19,56 @@ func NewService(queries *db.Queries) *Service {
 }
 
 func (s *Service) RegisterHandlers(router *gin.Engine) {
-	router.GET("/profile", s.GetUser)
+
 	router.DELETE("/profile", s.DeleteUser)
 }
 
 type returnUser struct {
-	ID       uuid.UUID `json:"id"`
-	Username string    `json:"username"`
-	Email    string    `json:"email"`
+	ID       pgtype.UUID `json:"id"`
+	Email    string      `json:"email"`
+	Name     string      `json:"name"`
+	Role     string      `json:"role"`
+	GoogleID string      `json:"google_id"`
 }
 
 func fromGetDB(user db.GetUserRow) *returnUser {
+
+	var ID pgtype.UUID
+	if user.ID.Valid {
+		ID = user.ID
+	} else {
+		return nil
+	}
 	return &returnUser{
-		ID:       user.ID,
-		Username: user.Username,
+		ID:       ID,
 		Email:    user.Email,
+		Name:     user.Name,
+		Role:     user.Role,
+		GoogleID: user.GoogleID,
 	}
-}
-
-func (s *Service) GetUser(c *gin.Context) {
-	// Parse request
-	idStr, _ := c.Get("userID")
-	id, err := uuid.Parse(idStr.(string))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Get user by username
-	user, err := s.queries.GetUser(context.Background(), id)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-			return
-		}
-
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
-		return
-	}
-
-	response := fromGetDB(user)
-	c.IndentedJSON(http.StatusOK, response)
 }
 
 func (s *Service) DeleteUser(c *gin.Context) {
-	idStr, _ := c.Get("userID")
-	id, err := uuid.Parse(idStr.(string))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
 
-	// Delete user
+	id, ok := userID.(pgtype.UUID)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid user ID format"})
+		return
+	}
+
 	if err := s.queries.DeleteUser(context.Background(), id); err != nil {
 		if err == sql.ErrNoRows {
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
 			return
 		}
-
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete user"})
 		return
 	}
 
-	// return 200 OK
 	c.Status(http.StatusOK)
 }
