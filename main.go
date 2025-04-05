@@ -114,7 +114,6 @@ func main() {
 	authenticated.Use(app.authMiddleware)
 	{
 		authenticated.GET("/dashboard", app.dashboardRedirectHandler)
-
 		authenticated.GET("/recruiter/dashboard", app.recruiterDashboardHandler)
 		authenticated.GET("/applicant/dashboard", app.applicantDashboardHandler)
 
@@ -124,7 +123,6 @@ func main() {
 			applicantRoutes.POST("/skills", app.postManageSkillsHandler)
 			applicantRoutes.GET("/resume", app.getResumeHandler)
 			applicantRoutes.POST("/resume", app.postResumeHandler)
-
 		}
 
 		jobsGroup := authenticated.Group("/jobs")

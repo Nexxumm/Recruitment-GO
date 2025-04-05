@@ -2,10 +2,15 @@ package main
 
 import (
 	db "Recruitment-GO/internal/db"
+	"bytes"
 	"database/sql"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -164,5 +169,95 @@ func (app *App) postResumeHandler(c *gin.Context) {
 
 	fmt.Printf("Successfully updated resume for user %s\n", pgID.String())
 
+	parsedResume, err := sendPDFToGemini(resumeBytes)
+	if err != nil {
+		c.String(http.StatusInternalServerError, "Error in Sending PDF to Gemini: %v", err)
+		c.Abort()
+		return
+	}
+	var jsonBytes []byte
+	jsonBytes, err = json.Marshal(parsedResume)
+	if err != nil {
+		fmt.Printf("Post Resume Handler: Error marshalling parsed resume to JSON: %v\n", err)
+		c.String(http.StatusInternalServerError, "<html><body>Error processing parsed resume data.</body></html>")
+		c.Abort()
+		return
+	}
+
+	paramsParsed := db.UpdateParsedResumeParams{
+		ID:           pgID,
+		ParsedResume: jsonBytes,
+	}
+
+	err = app.db.UpdateParsedResume(c.Request.Context(), paramsParsed)
+
+	if err != nil {
+		fmt.Printf("Post Resume Handler: DB error updating parsed resume for user %s: %v\n", pgID.String(), err)
+		c.String(http.StatusInternalServerError, "<html><body>Error saving parsed resume to database. Please try again.</body></html>")
+		return
+	}
+
+	fmt.Printf("Successfully updated Parsed resume for user %s\n", pgID.String())
 	c.Redirect(http.StatusSeeOther, "/applicant/dashboard")
+}
+
+func sendPDFToGemini(fileBytes []byte) (map[string]interface{}, error) {
+	apiKey := os.Getenv("API_KEY")
+	url := "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + apiKey
+
+	// Encode base64
+	base64PDF := base64.StdEncoding.EncodeToString(fileBytes)
+
+	// Build request
+	payload := map[string]interface{}{
+		"contents": []map[string]interface{}{
+			{
+				"parts": []map[string]interface{}{
+					{"text": "Extract JSON with name, skills, work experience from this resume."},
+					{
+						"inlineData": map[string]interface{}{
+							"mimeType": "application/pdf",
+							"data":     base64PDF,
+						},
+					},
+				},
+			},
+		},
+	}
+	body, _ := json.Marshal(payload)
+
+	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+
+	var result struct {
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					Text string `json:"text"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, err
+	}
+
+	var parsed map[string]any
+	if len(result.Candidates) > 0 && len(result.Candidates[0].Content.Parts) > 0 {
+
+		cleanText := strings.Trim(result.Candidates[0].Content.Parts[0].Text, "` \n")
+		cleanText = strings.TrimPrefix(cleanText, "json")
+		fmt.Println(cleanText)
+		err := json.Unmarshal([]byte(cleanText), &parsed)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return parsed, nil
 }

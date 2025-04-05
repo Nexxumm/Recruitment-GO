@@ -23,3 +23,13 @@ FROM skills s
 JOIN user_skills us ON s.id = us.skill_id
 WHERE us.user_id = $1
 ORDER BY s.name;
+
+
+-- name: SearchApplicantsBySkills :many
+SELECT u.id, u.name, u.email, u.role 
+FROM users u
+JOIN user_skills us ON u.id = us.user_id
+WHERE u.role = 'applicant' 
+AND us.skill_id = ANY ($1) 
+GROUP BY u.id
+HAVING COUNT(DISTINCT us.skill_id) = $2; 
