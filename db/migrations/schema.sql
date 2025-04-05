@@ -4,6 +4,8 @@ CREATE TABLE "users" (
     "email" varchar NOT NULL DEFAULT '' UNIQUE,
     "name" varchar NOT NULL UNIQUE,
     "role" varchar NOT NULL DEFAULT 'applicant',
+    resume_pdf BYTEA,
+    parsed_resume JSONB,
     PRIMARY KEY ("id")
 );
 

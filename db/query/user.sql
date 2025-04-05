@@ -28,3 +28,23 @@ SELECT id, google_id, email, name, role
 FROM users
 WHERE google_id = $1 
 LIMIT 1; 
+
+-- name: UpdateUserResume :exec
+UPDATE users
+SET resume_pdf = $2
+WHERE id = $1;
+
+-- name: GetUserResume :one
+SELECT resume_pdf 
+FROM users
+WHERE id = $1;
+
+-- name: GetParsedResume :one
+SELECT parsed_resume
+FROM users
+WHERE id = $1;
+
+-- name: UpdateParsedResume :exec
+UPDATE users
+SET parsed_resume = $2
+WHERE id = $1;

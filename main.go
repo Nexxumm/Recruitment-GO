@@ -110,15 +110,29 @@ func main() {
 		protectedRoutes.GET("", app.profileHandler)
 	}
 
-	authenticated := router.Group("/")    // Or maybe "/app" if you want a base path
-	authenticated.Use(app.authMiddleware) // Apply session auth check
+	authenticated := router.Group("/")
+	authenticated.Use(app.authMiddleware)
 	{
 		authenticated.GET("/dashboard", app.dashboardRedirectHandler)
 
-		// Specific dashboard routes (handlers will check role)
 		authenticated.GET("/recruiter/dashboard", app.recruiterDashboardHandler)
 		authenticated.GET("/applicant/dashboard", app.applicantDashboardHandler)
 
+		applicantRoutes := authenticated.Group("/applicant")
+		{
+			applicantRoutes.GET("/skills", app.getManageSkillsHandler)
+			applicantRoutes.POST("/skills", app.postManageSkillsHandler)
+			applicantRoutes.GET("/resume", app.getResumeHandler)
+			applicantRoutes.POST("/resume", app.postResumeHandler)
+
+		}
+
+		jobsGroup := authenticated.Group("/jobs")
+		{
+			jobsGroup.GET("/new", app.getJobPostingFormHandler)
+			jobsGroup.POST("", app.createJobPostingHandler)
+
+		}
 	}
 
 	//  Start Server
