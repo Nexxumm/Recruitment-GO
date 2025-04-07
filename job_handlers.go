@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -8,6 +11,7 @@ import (
 	db "Recruitment-GO/internal/db"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/shopspring/decimal"
 )
@@ -175,4 +179,126 @@ func (app *App) createJobPostingHandler(c *gin.Context) {
 
 	fmt.Printf("Successfully created job posting '%s' by recruiter %s\n", title, pgID.String())
 	c.Redirect(http.StatusSeeOther, "/recruiter/dashboard")
+}
+
+func (app *App) getApplicantProfileByRecruiterHandler(c *gin.Context) {
+	recruiterUserID, exists := c.Get("userID")
+	if !exists {
+		c.Redirect(http.StatusTemporaryRedirect, "/")
+		c.Abort()
+		return
+	}
+	recruiterPgID, ok := recruiterUserID.(pgtype.UUID)
+	if !ok || !recruiterPgID.Valid {
+		c.Redirect(http.StatusTemporaryRedirect, "/")
+		c.Abort()
+		return
+	}
+
+	recruiterUser, err := app.db.GetUser(c.Request.Context(), recruiterPgID)
+	if err != nil {
+		c.String(http.StatusInternalServerError, "Internal Server Error: %v", err)
+		c.Abort()
+		return
+	}
+	if recruiterUser.Role != RoleRecruiter {
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(http.StatusForbidden, "<html><body>Forbidden: Access denied</body></html>")
+		c.Abort()
+		return
+	}
+
+	applicantIDStr := c.Param("applicantID")
+	applicantUUID, err := uuid.Parse(applicantIDStr)
+	if err != nil {
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(http.StatusBadRequest, "<html><body>Invalid Applicant ID </body></html>")
+		return
+	}
+	applicantPgID := pgtype.UUID{Bytes: applicantUUID, Valid: true}
+
+	applicantUser, err := app.db.GetUser(c.Request.Context(), applicantPgID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.Header("Content-Type", "text/html; charset=utf-8")
+			c.String(http.StatusNotFound, "<html><body>Applicant not does not exist</body></html>")
+		} else {
+			fmt.Printf("Applicant Profile View: DB error fetching applicant %s: %v\n", applicantIDStr, err)
+			c.Header("Content-Type", "text/html; charset=utf-8")
+			c.String(http.StatusInternalServerError, "<html><body>Error fetching applicant data</body></html>")
+		}
+		return
+	}
+
+	if applicantUser.Role != RoleApplicant {
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(http.StatusForbidden, "<html><body>Forbidden: Cannot fetch details for this user</body></html>")
+		c.Abort()
+		return
+	}
+
+	skillNames, err := app.db.GetUserSkillNames(c.Request.Context(), applicantPgID)
+	if err != nil && err != sql.ErrNoRows {
+		fmt.Printf("Applicant Profile View: Failed to get skills for %s: %v\n", applicantIDStr, err)
+	}
+	var skillsHTML string
+	if len(skillNames) == 0 {
+		skillsHTML = "<p>No skills listed.</p>"
+	} else {
+		skillsHTML = "<ul>"
+		for _, name := range skillNames {
+			skillsHTML += fmt.Sprintf("<li>%s</li>", name)
+		}
+		skillsHTML += "</ul>"
+	}
+
+	parsedResume, err := app.db.GetParsedResume(c.Request.Context(), applicantPgID)
+	parsedResumeHtml := ""
+	if err != nil && err != sql.ErrNoRows {
+		fmt.Printf("Applicant Profile View: Error checking resume for %s: %v\n", applicantIDStr, err)
+		parsedResumeHtml = "<p style='color:red;'>Error checking resume status.</p>"
+	} else if len(parsedResume) == 0 || err == sql.ErrNoRows {
+		parsedResumeHtml = "<p>No resume uploaded.</p>"
+	} else {
+		var prettyJSON bytes.Buffer
+		if err := json.Indent(&prettyJSON, parsedResume, "", "    "); err == nil {
+			parsedResumeHtml = fmt.Sprintf("<pre><code>%s</code></pre>", prettyJSON.String())
+
+		} else {
+			parsedResumeHtml = fmt.Sprintf("<pre><code>%s</code></pre>", prettyJSON.String())
+		}
+
+	}
+
+	applicantProfileHTML := fmt.Sprintf(`
+        <h2>Applicant Profile</h2>
+        <p><strong>Name:</strong> %s</p>
+        <p><strong>Email:</strong> %s</p>
+        <hr>
+        <h3>Skills</h3>
+        %s
+        <hr>
+        <h3>Resume</h3>
+        %s
+        <hr>
+        `,
+		applicantUser.Name,
+		applicantUser.Email,
+		skillsHTML,
+		parsedResumeHtml,
+	)
+
+	fullHTML := fmt.Sprintf(`
+		<!DOCTYPE html><html><head><title>Applicant Profile - %s</title></head><body>
+		<nav>...</nav><hr>
+		%s
+		<hr>
+		<p><a href="/recruiter/search">Back to Search Results</a></p>
+        <p><a href="/recruiter/dashboard">Back to Dashboard</a></p>
+		</body></html>`,
+		applicantUser.Name,
+		applicantProfileHTML)
+
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.String(http.StatusOK, fullHTML)
 }

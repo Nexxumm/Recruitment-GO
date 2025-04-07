@@ -29,7 +29,7 @@ ORDER BY s.name;
 SELECT u.id, u.name, u.email, u.role 
 FROM users u
 JOIN user_skills us ON u.id = us.user_id
-WHERE u.role = 'applicant' 
-AND us.skill_id = ANY ($1) 
-GROUP BY u.id
-HAVING COUNT(DISTINCT us.skill_id) = $2; 
+WHERE u.role = 'applicant'                    
+AND us.skill_id = ANY(sqlc.arg(skill_ids)::uuid[]) 
+GROUP BY u.id, u.name, u.email, u.role         
+HAVING COUNT(DISTINCT us.skill_id) = sqlc.arg(num_skills)::int; 

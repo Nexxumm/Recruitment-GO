@@ -432,3 +432,177 @@ func (app *App) postManageSkillsHandler(c *gin.Context) {
 
 	c.Redirect(http.StatusSeeOther, "/applicant/dashboard")
 }
+
+func (app *App) getSkillSearchFormHandler(c *gin.Context) {
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.Redirect(http.StatusTemporaryRedirect, "/")
+		c.Abort()
+		return
+	}
+	pgID, ok := userID.(pgtype.UUID)
+	if !ok || !pgID.Valid {
+		c.Redirect(http.StatusTemporaryRedirect, "/")
+		c.Abort()
+		return
+	}
+
+	user, err := app.db.GetUser(c.Request.Context(), pgID)
+	if err != nil {
+		c.String(http.StatusInternalServerError, "Internal Server Error: %v", err)
+		c.Abort()
+		return
+	}
+
+	if user.Role != RoleRecruiter {
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(http.StatusForbidden, "<html><body>Forbidden: Only recruiters can search applicants</body></html>")
+		c.Abort()
+		return
+	}
+
+	allSkills, err := app.db.ListSkills(c.Request.Context())
+	if err != nil {
+		fmt.Printf("Skill Search GET: Failed to list skills: %v\n", err)
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(http.StatusInternalServerError, "<html><body>Error loading skills list</body></html>")
+		return
+	}
+
+	var skillsChecklistHTML strings.Builder
+	skillsChecklistHTML.WriteString(`<form method="GET" action="/recruiter/search/results">`)
+	skillsChecklistHTML.WriteString("<h3>Select skills to search for applicants:</h3>")
+
+	if len(allSkills) == 0 {
+		skillsChecklistHTML.WriteString("<p>No skills available in the system.</p>")
+	} else {
+		for _, skill := range allSkills {
+			var skillUUID uuid.UUID
+			var skillIDStr string
+			if skill.ID.Valid {
+				skillUUID = uuid.UUID(skill.ID.Bytes)
+				skillIDStr = skillUUID.String()
+			} else {
+				continue
+			}
+			skillsChecklistHTML.WriteString(fmt.Sprintf(
+				`<div><input type="checkbox" id="skill_%s" name="skill_id" value="%s"> <label for="skill_%s">%s</label></div>`,
+				skillIDStr, skillIDStr, skillIDStr, skill.Name,
+			))
+		}
+		skillsChecklistHTML.WriteString(`<br><button type="submit">Search Applicants</button>`)
+	}
+	skillsChecklistHTML.WriteString(`</form>`)
+
+	fullHTML := fmt.Sprintf(`
+		<!DOCTYPE html><html><head><title>Search Applicants by Skill</title></head><body>
+		<nav>...</nav><hr>
+		<h1>Search Applicants by Skill</h1>
+		%s
+		<hr>
+		<p><a href="/recruiter/dashboard">Back to Dashboard</a></p>
+		</body></html>`,
+		skillsChecklistHTML.String())
+
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.String(http.StatusOK, fullHTML)
+}
+
+func (app *App) getSkillSearchResultsHandler(c *gin.Context) {
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.Redirect(http.StatusTemporaryRedirect, "/")
+		c.Abort()
+		return
+	}
+	pgID, ok := userID.(pgtype.UUID)
+	if !ok || !pgID.Valid {
+		c.Redirect(http.StatusTemporaryRedirect, "/")
+		c.Abort()
+		return
+	}
+
+	user, err := app.db.GetUser(c.Request.Context(), pgID)
+	if err != nil {
+		c.String(http.StatusInternalServerError, "Internal Server Error: %v", err)
+		c.Abort()
+		return
+	}
+
+	if user.Role != RoleRecruiter {
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(http.StatusForbidden, "<html><body>Forbidden: Only recruiters can search applicants</body></html>")
+		c.Abort()
+		return
+	}
+
+	skillIDStrings := c.QueryArray("skill_id")
+
+	if len(skillIDStrings) == 0 {
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(http.StatusBadRequest, "<html><body>Please select at least one skill to search. <a href='/recruiter/search'>Go back</a></body></html>")
+		return
+	}
+
+	skillPgUUIDs := make([]pgtype.UUID, 0, len(skillIDStrings))
+	for _, idStr := range skillIDStrings {
+		parsedUUID, err := uuid.Parse(idStr)
+		if err != nil {
+			c.Header("Content-Type", "text/html; charset=utf-8")
+			c.String(http.StatusBadRequest, "<html><body>Invalid skill ID format submitted. <a href='/recruiter/search'>Go back</a></body></html>")
+			return
+		}
+		skillPgUUIDs = append(skillPgUUIDs, pgtype.UUID{Bytes: parsedUUID, Valid: true})
+	}
+
+	params := db.SearchApplicantsBySkillsParams{
+		SkillIds:  skillPgUUIDs,
+		NumSkills: int32(len(skillPgUUIDs)),
+	}
+
+	applicants, err := app.db.SearchApplicantsBySkills(c.Request.Context(), params)
+	if err != nil && err != sql.ErrNoRows {
+		fmt.Printf("Skill Search Results: DB error searching applicants: %v\n", err)
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(http.StatusInternalServerError, "<html><body>Error searching applicants. Please try again.</body></html>")
+		return
+	}
+
+	var resultsHTML strings.Builder
+	resultsHTML.WriteString("<h2>Search Results</h2>")
+	resultsHTML.WriteString(fmt.Sprintf("<p>Found %d applicant(s) matching ALL selected skills:</p>", len(applicants)))
+
+	if len(applicants) == 0 {
+		resultsHTML.WriteString("<p>No applicants found matching all the selected skills.</p>")
+	} else {
+		resultsHTML.WriteString("<ul>")
+		for _, applicant := range applicants {
+			applicantIDStr := ""
+			if applicant.ID.Valid {
+				applicantIDStr = uuid.UUID(applicant.ID.Bytes).String()
+			}
+			viewProfileLink := fmt.Sprintf("/recruiter/applicant/%s", applicantIDStr)
+
+			resultsHTML.WriteString(fmt.Sprintf(
+				`<li>Name: %s | Email: %s (ID = %s )<a href="%s">View Full Profile</a></li>`,
+				applicant.Name,
+				applicant.Email,
+				applicantIDStr,
+				viewProfileLink))
+		}
+		resultsHTML.WriteString("</ul>")
+	}
+
+	fullHTML := fmt.Sprintf(`
+		<!DOCTYPE html><html><head><title>Applicant Search Results</title></head><body>
+		<nav>...</nav><hr>
+		%s
+		<hr>
+		<p><a href="/recruiter/search">New Search</a></p>
+		<p><a href="/recruiter/dashboard">Back to Dashboard</a></p>
+		</body></html>`,
+		resultsHTML.String())
+
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.String(http.StatusOK, fullHTML)
+}

@@ -125,6 +125,14 @@ func main() {
 			applicantRoutes.POST("/resume", app.postResumeHandler)
 		}
 
+		recruiterRoutes := authenticated.Group("/recruiter")
+		{
+			recruiterRoutes.GET("/search", app.getSkillSearchFormHandler)
+			recruiterRoutes.GET("/search/results", app.getSkillSearchResultsHandler)
+			recruiterRoutes.GET("/applicant/:applicantID", app.getApplicantProfileByRecruiterHandler)
+
+		}
+
 		jobsGroup := authenticated.Group("/jobs")
 		{
 			jobsGroup.GET("/new", app.getJobPostingFormHandler)
