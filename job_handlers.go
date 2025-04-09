@@ -302,3 +302,100 @@ func (app *App) getApplicantProfileByRecruiterHandler(c *gin.Context) {
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.String(http.StatusOK, fullHTML)
 }
+
+func (app *App) listJobsHandler(c *gin.Context) {
+	userID, exists := c.Get("userID")
+	if !exists {
+		fmt.Println("Manage Skills POST: No user ID found in context.")
+		c.Redirect(http.StatusTemporaryRedirect, "/")
+		c.Abort()
+		return
+	}
+	pgID, ok := userID.(pgtype.UUID)
+	if !ok || !pgID.Valid {
+		fmt.Println("Manage Skills POST: Invalid user ID format.")
+		c.Redirect(http.StatusTemporaryRedirect, "/")
+		c.Abort()
+		return
+	}
+
+	user, err := app.db.GetUser(c.Request.Context(), pgID)
+	if err != nil {
+		fmt.Printf("Manage Skills POST: Failed to get user %s: %v\n", pgID.String(), err)
+		c.String(http.StatusInternalServerError, "Failed to get user from DB: %v", err)
+		c.Redirect(http.StatusTemporaryRedirect, "/")
+		c.Abort()
+		return
+	}
+
+	postings, err := app.db.ListActiveJobPostings(c.Request.Context())
+	if err != nil && err != sql.ErrNoRows {
+		fmt.Printf("List Jobs: DB error listing active jobs: %v\n", err)
+	}
+
+	var jobsListHTML strings.Builder
+	jobsListHTML.WriteString("<h2>Available Job Postings</h2>")
+
+	if err != nil && err != sql.ErrNoRows {
+		jobsListHTML.WriteString("<p style='color:red;'>Error loading job postings.</p>")
+	} else if len(postings) == 0 {
+		jobsListHTML.WriteString("<p>There are currently no active job postings.</p>")
+	} else {
+		jobsListHTML.WriteString("<table border='1' style='border-collapse: collapse; width: 80%;'>")
+		jobsListHTML.WriteString("<thead><tr><th>Title</th><th>Recruiter</th><th>Salary Min</th><th>Salary Max</th><th>Status</th><th>Action</th></tr></thead>")
+		jobsListHTML.WriteString("<tbody>")
+		for _, posting := range postings {
+			var jobIDStr string
+			if posting.ID.Valid {
+				jobIDStr = uuid.UUID(posting.ID.Bytes).String()
+			} else {
+				continue
+			}
+
+			salaryMinVal, err := posting.SalaryMin.Value()
+			if err != nil {
+				salaryMinVal = ""
+			}
+			salaryMaxVal, err := posting.SalaryMax.Value()
+			if err != nil {
+				salaryMaxVal = ""
+			}
+
+			applyLink := fmt.Sprintf("/jobs/%s/apply", jobIDStr)
+
+			jobsListHTML.WriteString("<tr>")
+			jobsListHTML.WriteString(fmt.Sprintf("<td>%s</td>", posting.Title))
+			jobsListHTML.WriteString(fmt.Sprintf("<td>%s</td>", posting.Status))
+			jobsListHTML.WriteString(fmt.Sprintf("<td>%s</td>", salaryMinVal))
+			jobsListHTML.WriteString(fmt.Sprintf("<td>%v</td>", salaryMaxVal))
+			jobsListHTML.WriteString(fmt.Sprintf("<td>%v</td>", posting.Status))
+			jobsListHTML.WriteString(fmt.Sprintf(`<td><a href="%s">Apply</a></td>`, applyLink))
+			jobsListHTML.WriteString("</tr>")
+		}
+		jobsListHTML.WriteString("</tbody></table>")
+	}
+
+	backLink := "/"
+	if err == nil {
+		if user.Role == RoleApplicant {
+			backLink = "/applicant/dashboard"
+		} else if user.Role == RoleRecruiter {
+			backLink = "/recruiter/dashboard"
+		}
+	}
+
+	fullHTML := fmt.Sprintf(`
+		<!DOCTYPE html><html><head><title>Available Jobs</title></head><body>
+		<nav>...</nav><hr>
+		%s 
+		<hr>
+		<p><a href="%s">Back to Dashboard</a></p>
+		<p><a href="/logout">Logout</a></p>
+		<footer>...</footer></body></html>`,
+		jobsListHTML.String(),
+		backLink,
+	)
+
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.String(http.StatusOK, fullHTML)
+}

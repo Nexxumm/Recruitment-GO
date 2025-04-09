@@ -135,6 +135,7 @@ func main() {
 
 		jobsGroup := authenticated.Group("/jobs")
 		{
+			jobsGroup.GET("", app.listJobsHandler)
 			jobsGroup.GET("/new", app.getJobPostingFormHandler)
 			jobsGroup.POST("", app.createJobPostingHandler)
 
