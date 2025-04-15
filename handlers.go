@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
@@ -146,12 +147,21 @@ func (app *App) recruiterDashboardHandler(c *gin.Context) {
 	} else {
 		jobsHtmlBuilder.WriteString("<ul>")
 		for _, posting := range postings {
-			// Assuming each posting has a Title and Status field
+
+			var jobIDStr string
+			if posting.ID.Valid {
+				jobIDStr = uuid.UUID(posting.ID.Bytes).String()
+			} else {
+				continue
+			}
+
+			manageAppLink := fmt.Sprintf("/recruiter/jobs/%s/applications", jobIDStr)
 
 			jobsHtmlBuilder.WriteString(fmt.Sprintf(
-				`<li>%s (Status: %s) </li>`,
+				`<li>%s (Status: %s) - <a href="%s">Manage Applications</a> </li>`,
 				posting.Title,
 				posting.Status,
+				manageAppLink,
 			))
 		}
 		jobsHtmlBuilder.WriteString("</ul>")
@@ -208,9 +218,34 @@ func (app *App) applicantDashboardHandler(c *gin.Context) {
 		return
 	}
 
-	userName := user.Name
+	applications, err := app.db.GetApplicationsByUserID(c.Request.Context(), pgID)
+	if err != nil && err != sql.ErrNoRows {
+		fmt.Printf("Applicant Dashboard: Failed to get applications for %s: %v\n", pgID.String(), err)
+	}
 
-	applicationsHtml := "<p><i>(Your applications will appear here)</i></p>"
+	var applicationsHtmlBuilder strings.Builder
+	if err != nil && err != sql.ErrNoRows {
+		applicationsHtmlBuilder.WriteString("<p style='color:red;'>Error loading application history.</p>")
+	} else if len(applications) == 0 {
+		applicationsHtmlBuilder.WriteString("<p>You have not submitted any applications yet.</p>")
+	} else {
+		applicationsHtmlBuilder.WriteString("<ul>")
+		for _, application := range applications {
+
+			appliedAtStr := "N/A"
+			if application.AppliedAt.Valid {
+				appliedAtStr = application.AppliedAt.Time.Format(time.RFC822)
+			}
+
+			applicationsHtmlBuilder.WriteString(fmt.Sprintf(
+				"<li>Job: %s | Status: %s | Applied: %s</li>",
+				application.JobTitle, application.ApplicationStatus, appliedAtStr,
+			))
+		}
+		applicationsHtmlBuilder.WriteString("</ul>")
+	}
+	applicationsHtml := applicationsHtmlBuilder.String()
+
 	skillNames, err := app.db.GetUserSkillNames(c.Request.Context(), pgID)
 	if err != nil && err != sql.ErrNoRows {
 		fmt.Printf("Applicant Dashboard: Failed to get user skills for %s: %v\n", pgID.String(), err)
@@ -250,7 +285,7 @@ func (app *App) applicantDashboardHandler(c *gin.Context) {
         <hr>
         <p><a href="/logout">Logout</a></p>
 		</body></html>`,
-		userName, applicationsHtml, skillsHtml.String())
+		user.Name, applicationsHtml, skillsHtml.String())
 
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.String(http.StatusOK, dashboardHTML)

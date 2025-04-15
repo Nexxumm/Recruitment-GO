@@ -130,6 +130,8 @@ func main() {
 			recruiterRoutes.GET("/search", app.getSkillSearchFormHandler)
 			recruiterRoutes.GET("/search/results", app.getSkillSearchResultsHandler)
 			recruiterRoutes.GET("/applicant/:applicantID", app.getApplicantProfileByRecruiterHandler)
+			recruiterRoutes.GET("/jobs/:jobID/applications", app.getJobApplicationsHandler)
+			recruiterRoutes.POST("/jobs/:jobID/applications/:applicationID/reject", app.rejectApplicationHandler)
 
 		}
 
@@ -138,6 +140,8 @@ func main() {
 			jobsGroup.GET("", app.listJobsHandler)
 			jobsGroup.GET("/new", app.getJobPostingFormHandler)
 			jobsGroup.POST("", app.createJobPostingHandler)
+			jobsGroup.GET("/:jobID/apply", app.getApplyFormHandler)
+			jobsGroup.POST("/:jobID/apply", app.postApplyHandler)
 
 		}
 	}

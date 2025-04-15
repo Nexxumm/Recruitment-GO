@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	db "Recruitment-GO/internal/db"
 
@@ -398,4 +399,145 @@ func (app *App) listJobsHandler(c *gin.Context) {
 
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.String(http.StatusOK, fullHTML)
+}
+
+func (app *App) getJobApplicationsHandler(c *gin.Context) {
+
+	jobIDStr := c.Param("jobID")
+	jobUUID, err := uuid.Parse(jobIDStr)
+	if err != nil {
+
+		return
+	}
+	jobPgID := pgtype.UUID{Bytes: jobUUID, Valid: true}
+
+	job, err := app.db.GetJobPostingByID(c.Request.Context(), jobPgID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.String(http.StatusNotFound, "Job posting not found")
+		} else {
+			c.String(http.StatusInternalServerError, "Error fetching job data")
+		}
+		return
+	}
+
+	applications, err := app.db.GetApplicationsForJobPosting(c.Request.Context(), jobPgID)
+	if err != nil && err != sql.ErrNoRows {
+		fmt.Printf("Manage Applications GET: DB error fetching applications for job %s: %v\n", jobIDStr, err)
+		c.String(http.StatusInternalServerError, "Failed to fetch applications for job posting: %v", err)
+	}
+
+	var applicationsHTML strings.Builder
+	applicationsHTML.WriteString(fmt.Sprintf("<h2>Applications for: %s</h2>", job.Title))
+
+	if err != nil && err != sql.ErrNoRows {
+		applicationsHTML.WriteString("<p style='color:red;'>Error loading applications.</p>")
+	} else if len(applications) == 0 {
+		applicationsHTML.WriteString("<p>No applications received yet.</p>")
+	} else {
+		applicationsHTML.WriteString("<table border='1' style='border-collapse: collapse;'>")
+		applicationsHTML.WriteString("<thead><tr><th>Applicant Name</th><th>Email</th><th>Status</th><th>Applied At</th><th>Actions</th></tr></thead>")
+		applicationsHTML.WriteString("<tbody>")
+		for _, application := range applications {
+			var appIDStr string
+			if application.ApplicationID.Valid {
+				appIDStr = uuid.UUID(application.ApplicationID.Bytes).String()
+			} else {
+				continue
+			}
+
+			appliedAtStr := "N/A"
+			if application.AppliedAt.Valid {
+				appliedAtStr = application.AppliedAt.Time.Format(time.RFC822)
+			}
+
+			rejectForm := fmt.Sprintf(`<form method="POST" action="/recruiter/jobs/%s/applications/%s/reject" style="display:inline;"><button type="submit">Reject</button></form>`, jobIDStr, appIDStr)
+			interviewForm := fmt.Sprintf(`<form method="POST" action="/recruiter/jobs/%s/applications/%s/request_interview" style="display:inline;"><button type="submit">Request Interview</button></form>`, jobIDStr, appIDStr)
+
+			if application.ApplicationStatus == "rejected" {
+
+				rejectForm = "<span>Rejected</span>"
+				interviewForm = ""
+			}
+
+			applicationsHTML.WriteString("<tr>")
+			applicationsHTML.WriteString(fmt.Sprintf("<td>%s</td>", application.UserName))
+			applicationsHTML.WriteString(fmt.Sprintf("<td>%s</td>", application.UserEmail))
+			applicationsHTML.WriteString(fmt.Sprintf("<td>%s</td>", application.ApplicationStatus))
+			applicationsHTML.WriteString(fmt.Sprintf("<td>%s</td>", appliedAtStr))
+			applicationsHTML.WriteString(fmt.Sprintf("<td>%s %s</td>", rejectForm, interviewForm))
+			applicationsHTML.WriteString("</tr>")
+		}
+		applicationsHTML.WriteString("</tbody></table>")
+	}
+
+	fullHTML := fmt.Sprintf(`
+		<!DOCTYPE html><html><head><title>Manage Applications</title></head><body>
+		<nav>...</nav><hr>
+		%s
+		<hr>
+		<p><a href="/recruiter/dashboard">Back to Dashboard</a></p>
+		</body></html>`,
+		applicationsHTML.String(),
+	)
+
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.String(http.StatusOK, fullHTML)
+}
+
+func (app *App) rejectApplicationHandler(c *gin.Context) {
+	recruiterID, exists := c.Get("userID")
+	if !exists {
+		c.Redirect(http.StatusTemporaryRedirect, "/")
+		c.Abort()
+		return
+	}
+	recruiterPgID, ok := recruiterID.(pgtype.UUID)
+	if !ok || !recruiterPgID.Valid {
+		c.Redirect(http.StatusTemporaryRedirect, "/")
+		return
+	}
+
+	recruiterUser, err := app.db.GetUser(c.Request.Context(), recruiterPgID)
+	if err != nil {
+		c.String(http.StatusInternalServerError, "Internal Server Error: %v", err)
+		c.Abort()
+		return
+	}
+	if recruiterUser.Role != RoleRecruiter {
+		c.Redirect(http.StatusTemporaryRedirect, "/")
+		c.Abort()
+		return
+	}
+
+	jobIDStr := c.Param("jobID")
+	if err != nil {
+		c.Redirect(http.StatusTemporaryRedirect, "/")
+		return
+	}
+
+	applicationIDStr := c.Param("applicationID")
+	appUUID, err := uuid.Parse(applicationIDStr)
+	if err != nil {
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(http.StatusBadRequest, "<html><body>Invalid Application ID format</body></html>")
+		return
+	}
+	appPgID := pgtype.UUID{Bytes: appUUID, Valid: true}
+
+	params := db.UpdateApplicationStatusParams{
+		ID:     appPgID,
+		Status: "rejected",
+	}
+	err = app.db.UpdateApplicationStatus(c.Request.Context(), params)
+	if err != nil {
+		fmt.Printf("Reject Application POST: DB error updating status for app %s: %v\n", applicationIDStr, err)
+		c.String(http.StatusInternalServerError, "Failed to update application status.")
+		return
+	}
+
+	fmt.Printf("Application %s rejected by recruiter %s\n", applicationIDStr, recruiterPgID.String())
+
+	redirectURL := fmt.Sprintf("/recruiter/jobs/%s/applications", jobIDStr)
+	c.Redirect(http.StatusSeeOther, redirectURL)
 }
