@@ -452,7 +452,7 @@ func (app *App) getJobApplicationsHandler(c *gin.Context) {
 			}
 
 			rejectForm := fmt.Sprintf(`<form method="POST" action="/recruiter/jobs/%s/applications/%s/reject" style="display:inline;"><button type="submit">Reject</button></form>`, jobIDStr, appIDStr)
-			interviewForm := fmt.Sprintf(`<form method="POST" action="/recruiter/jobs/%s/applications/%s/request_interview" style="display:inline;"><button type="submit">Request Interview</button></form>`, jobIDStr, appIDStr)
+			interviewForm := fmt.Sprintf(`<form method="POST" action="/recruiter/jobs/%s/applications/%s/interview" style="display:inline;"><button type="submit">Request Interview</button></form>`, jobIDStr, appIDStr)
 
 			if application.ApplicationStatus == "rejected" {
 

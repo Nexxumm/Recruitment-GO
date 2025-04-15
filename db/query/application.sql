@@ -21,4 +21,21 @@ SELECT
 FROM applications a
 JOIN job_postings j ON a.job_posting_id = j.id
 WHERE a.user_id = $1
-ORDER BY a.applied_at DESC; -- Show most recent applications first
+ORDER BY a.applied_at DESC; 
+
+-- name: GetApplicationByID :one
+SELECT 
+    a.id, 
+    a.user_id, 
+    a.job_posting_id, 
+    a.resume_id,
+    a.status, 
+    a.applied_at,
+    u.email AS applicant_email, 
+    j.recruiter_id 
+FROM applications a
+JOIN users u ON a.user_id = u.id
+JOIN job_postings j ON a.job_posting_id = j.id
+WHERE a.id = $1;
+
+

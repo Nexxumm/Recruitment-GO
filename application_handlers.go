@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"net/smtp"
+	"os"
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
@@ -221,4 +223,133 @@ func (app *App) postApplyHandler(c *gin.Context) {
 
 		c.Redirect(http.StatusTemporaryRedirect, "/applicant/dashboard")
 	}
+}
+
+func (app *App) requestInterviewHandler(c *gin.Context) {
+	recruiterUserID, exists := c.Get("userID")
+	if !exists {
+		fmt.Println("Request Interview : No user ID found in context.")
+		c.Redirect(http.StatusTemporaryRedirect, "/")
+		c.Abort()
+		return
+	}
+	recruiterPgID, ok := recruiterUserID.(pgtype.UUID)
+	if !ok || !recruiterPgID.Valid {
+		fmt.Println("Request Interview : Invalid user ID format.")
+		c.Redirect(http.StatusTemporaryRedirect, "/")
+		c.Abort()
+		return
+	}
+
+	recruiterUser, err := app.db.GetUser(c.Request.Context(), recruiterPgID)
+	if err != nil {
+		fmt.Printf("Request Interview : Failed to get user %s: %v\n", recruiterPgID.String(), err)
+		c.String(http.StatusInternalServerError, "Failed to get user from DB: %v", err)
+		c.Redirect(http.StatusTemporaryRedirect, "/")
+		c.Abort()
+		return
+	}
+	if recruiterUser.Role != RoleRecruiter {
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(http.StatusForbidden, "<html><body>Forbidden: Access denied</body></html>")
+		c.Abort()
+		return
+	}
+
+	jobIDStr := c.Param("jobID")
+	jobUUID, err := uuid.Parse(jobIDStr)
+	if err != nil {
+		c.Redirect(http.StatusTemporaryRedirect, "/")
+		c.Abort()
+		return
+	}
+	jobPgID := pgtype.UUID{Bytes: jobUUID, Valid: true}
+
+	applicationIDStr := c.Param("applicationID")
+	appUUID, err := uuid.Parse(applicationIDStr)
+	if err != nil {
+		c.Redirect(http.StatusTemporaryRedirect, "/")
+		c.Abort()
+		return
+	}
+	appPgID := pgtype.UUID{Bytes: appUUID, Valid: true}
+
+	application, err := app.db.GetApplicationByID(c.Request.Context(), appPgID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.String(http.StatusNotFound, "Application not found.")
+		} else {
+			fmt.Printf("Request Interview POST: DB error fetching application %s: %v\n", applicationIDStr, err)
+			c.String(http.StatusInternalServerError, "Error verifying application.")
+		}
+		return
+	}
+
+	if !application.JobPostingID.Valid || application.JobPostingID.Bytes != jobPgID.Bytes {
+		fmt.Printf("Request Interview POST: Application %s does not belong to Job %s\n", applicationIDStr, jobIDStr)
+		c.String(http.StatusBadRequest, "Application/Job mismatch.")
+		return
+	}
+
+	if !application.RecruiterID.Valid || application.RecruiterID.Bytes != recruiterPgID.Bytes {
+		fmt.Printf("Request Interview POST: Recruiter %s does not own job %s\n", recruiterPgID.String(), jobIDStr)
+		c.String(http.StatusForbidden, "Forbidden: You do not own the job posting for this application.")
+		return
+	}
+
+	currentStatus := application.Status
+	if currentStatus != "submitted" {
+		fmt.Printf("Request Interview POST: Cannot request interview for application %s with status '%s'\n", applicationIDStr, currentStatus)
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(http.StatusBadRequest, fmt.Sprintf("<html><body>Cannot request interview for application with status '%s'. <a href='/recruiter/jobs/%s/applications'>Back</a></body></html>", html.EscapeString(currentStatus), jobIDStr))
+		return
+	}
+
+	newStatus := "accepted"
+	params := db.UpdateApplicationStatusParams{
+		ID:     appPgID,
+		Status: newStatus,
+	}
+	err = app.db.UpdateApplicationStatus(c.Request.Context(), params)
+	if err != nil {
+		fmt.Printf("Request Interview POST: DB error updating status for app %s: %v\n", applicationIDStr, err)
+		c.String(http.StatusInternalServerError, "Failed to update application status.")
+		return
+	}
+	fmt.Printf("Application %s status updated to '%s' by recruiter %s\n", applicationIDStr, newStatus, recruiterPgID.String())
+
+	smtpHost := os.Getenv("SMTP_HOST")
+	smtpPort := os.Getenv("SMTP_PORT")
+	smtpUser := os.Getenv("SMTP_USER")
+	smtpPassword := os.Getenv("SMTP_PASSWORD")
+	smtpFrom := os.Getenv("SMTP_FROM_EMAIL")
+	applicantEmail := application.ApplicantEmail
+	if smtpHost == "" || smtpPort == "" || smtpUser == "" || smtpPassword == "" || smtpFrom == "" || applicantEmail == "" {
+		fmt.Printf("Request Interview POST: Skipping email notification for app %s due to missing SMTP config or applicant email.\n", applicationIDStr)
+		c.String(http.StatusInternalServerError, "SMTP configuration or applicant email is missing.")
+		return
+	} else {
+
+		subject := "Interview Request for Job Application"
+		body := fmt.Sprintln("Hello,\n\nYou have been invited for an interview for a job you applied for.\nPlease log in to your dashboard to view details.\n\nRegards,\nRecruitment Team")
+		msg := []byte("To: " + applicantEmail + "\r\n" +
+			"From: " + smtpFrom + "\r\n" +
+			"Subject: " + subject + "\r\n" +
+			"\r\n" +
+			body + "\r\n")
+
+		auth := smtp.PlainAuth("", smtpUser, smtpPassword, smtpHost)
+
+		smtpAddr := fmt.Sprintf("%s:%s", smtpHost, smtpPort)
+		err := smtp.SendMail(smtpAddr, auth, smtpFrom, []string{applicantEmail}, msg)
+		if err != nil {
+
+			fmt.Printf("Request Interview POST: FAILED to send email notification to %s for app %s: %v\n", applicantEmail, applicationIDStr, err)
+		} else {
+			fmt.Printf("Request Interview POST: Successfully sent email notification to %s for app %s\n", applicantEmail, applicationIDStr)
+		}
+	}
+
+	redirectURL := fmt.Sprintf("/recruiter/jobs/%s/applications", jobIDStr)
+	c.Redirect(http.StatusSeeOther, redirectURL)
 }

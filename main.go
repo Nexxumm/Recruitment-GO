@@ -132,7 +132,7 @@ func main() {
 			recruiterRoutes.GET("/applicant/:applicantID", app.getApplicantProfileByRecruiterHandler)
 			recruiterRoutes.GET("/jobs/:jobID/applications", app.getJobApplicationsHandler)
 			recruiterRoutes.POST("/jobs/:jobID/applications/:applicationID/reject", app.rejectApplicationHandler)
-
+			recruiterRoutes.POST("/jobs/:jobID/applications/:applicationID/interview", app.requestInterviewHandler)
 		}
 
 		jobsGroup := authenticated.Group("/jobs")
